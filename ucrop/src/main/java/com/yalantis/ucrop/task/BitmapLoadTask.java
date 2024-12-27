@@ -11,6 +11,7 @@ import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.yalantis.ucrop.UCropHttpClientStore;
 import com.yalantis.ucrop.callback.BitmapLoadCallback;
 import com.yalantis.ucrop.model.ExifInfo;
 import com.yalantis.ucrop.util.BitmapLoadUtils;
@@ -144,23 +145,23 @@ public class BitmapLoadTask extends AsyncTask<Void, Void, BitmapLoadTask.BitmapW
     }
 
     private void processInputUri() throws NullPointerException, IOException {
-        String inputUriScheme = mInputUri.getScheme();
-        Log.d(TAG, "Uri scheme: " + inputUriScheme);
-        if ("http".equals(inputUriScheme) || "https".equals(inputUriScheme)) {
+        Log.d(TAG, "Uri scheme: " + mInputUri.getScheme());
+        if (isDownloadUri(mInputUri)) {
             try {
                 downloadFile(mInputUri, mOutputUri);
             } catch (NullPointerException | IOException e) {
                 Log.e(TAG, "Downloading failed", e);
                 throw e;
             }
-        } else if ("content".equals(inputUriScheme)) {
+        } else if (isContentUri(mInputUri)) {
             try {
                 copyFile(mInputUri, mOutputUri);
             } catch (NullPointerException | IOException e) {
                 Log.e(TAG, "Copying failed", e);
                 throw e;
             }
-        } else if (!"file".equals(inputUriScheme)) {
+        } else if (!isFileUri(mInputUri)) {
+            String inputUriScheme = mInputUri.getScheme();
             Log.e(TAG, "Invalid Uri scheme " + inputUriScheme);
             throw new IllegalArgumentException("Invalid Uri scheme" + inputUriScheme);
         }
@@ -177,9 +178,14 @@ public class BitmapLoadTask extends AsyncTask<Void, Void, BitmapLoadTask.BitmapW
         OutputStream outputStream = null;
         try {
             inputStream = mContext.getContentResolver().openInputStream(inputUri);
-            outputStream = new FileOutputStream(new File(outputUri.getPath()));
             if (inputStream == null) {
                 throw new NullPointerException("InputStream for given input Uri is null");
+            }
+
+            if (isContentUri(outputUri)) {
+                outputStream = mContext.getContentResolver().openOutputStream(outputUri);
+            } else {
+                outputStream = new FileOutputStream(new File(outputUri.getPath()));
             }
 
             byte buffer[] = new byte[1024];
@@ -204,19 +210,26 @@ public class BitmapLoadTask extends AsyncTask<Void, Void, BitmapLoadTask.BitmapW
             throw new NullPointerException("Output Uri is null - cannot download image");
         }
 
-        OkHttpClient client = new OkHttpClient();
+        OkHttpClient client = UCropHttpClientStore.INSTANCE.getClient();
 
         BufferedSource source = null;
         Sink sink = null;
         Response response = null;
         try {
             Request request = new Request.Builder()
-                    .url(inputUri.toString())
-                    .build();
+                .url(inputUri.toString())
+                .build();
             response = client.newCall(request).execute();
             source = response.body().source();
 
-            OutputStream outputStream = mContext.getContentResolver().openOutputStream(outputUri);
+            OutputStream outputStream;
+
+            if (isContentUri(mOutputUri)) {
+                outputStream = mContext.getContentResolver().openOutputStream(outputUri);
+            } else {
+                outputStream = new FileOutputStream(new File(outputUri.getPath()));
+            }
+
             if (outputStream != null) {
                 sink = Okio.sink(outputStream);
                 source.readAll(sink);
@@ -253,5 +266,20 @@ public class BitmapLoadTask extends AsyncTask<Void, Void, BitmapLoadTask.BitmapW
             return true;
         }
         return false;
+    }
+
+    private boolean isDownloadUri(Uri uri) {
+        final String schema = uri.getScheme();
+        return schema.equals("http") || schema.equals("https");
+    }
+
+    private boolean isContentUri(Uri uri) {
+        final String schema = uri.getScheme();
+        return schema.equals("content");
+    }
+
+    private boolean isFileUri(Uri uri) {
+        final String schema = uri.getScheme();
+        return schema.equals("file");
     }
 }
